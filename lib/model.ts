@@ -4,6 +4,7 @@
 // snapshot's own figures. Nothing here names a protocol: the same function scores every row.
 //
 //   implied = TVL x categoryMultiple x growthMult x maturityMult x breadthMult
+//             x momentumMult x dominanceMult
 //
 //   categoryMultiple  the market's own price for this kind of protocol: the median
 //                     market-cap / TVL of the snapshot's live-token protocols in the same
@@ -13,12 +14,24 @@
 //   growthMult        1 + clamp(change_7d, -50, 100) / 100 x 0.6. A protocol whose TVL is
 //                     growing is worth more than one whose TVL is shrinking; the clamp keeps
 //                     one wild week (the snapshot's biggest is +4448%) from owning the board.
-//   maturityMult      0.65 + 0.35 x ln(1 + min(age, 1095)) / ln(1096). Age is the days from
+//   maturityMult      0.65 + 0.35 x ln(1 + min(age, 1825)) / ln(1826). Age is the days from
 //                     listed_at to the snapshot's as_of; unknown age counts as 365 days. A
 //                     protocol that has run longer with no token has had longer to build the
 //                     record a launch would price, but the value of one more year fades.
-//   breadthMult       1 + 0.03 x min(chains, 5). A protocol live on more chains has more
-//                     distribution; the boost is small on purpose.
+//                     The cap is five years: thirty-four rows are older than three.
+//   breadthMult       1 + 0.05 x log2(1 + min(chains, 32)). A protocol live on more chains
+//                     has more distribution; the log keeps a protocol on 176 chains from
+//                     owning the board the way a flat per-chain boost would, and the cap at
+//                     32 chains is where the curve has flattened.
+//   momentumMult      1 + clamp(median 7-day TVL change of the category's live-token
+//                     protocols, -20, +20) / 100 x 0.5. A sector the market is rewarding
+//                     this week prices its next launches higher; a sector it is punishing
+//                     prices them lower. Needs at least 3 live-token protocols in the
+//                     category with a 7-day change, else 1.
+//   dominanceMult     1 + 0.15 x share, where share is the protocol's TVL over the
+//                     pre-token TVL of its category on the board. The category leader
+//                     commands a launch premium; a category with fewer than 3 board rows
+//                     gives no premium, because a lone protocol is not a leader.
 //
 // The board holds every rankable pre-token protocol in the snapshot: the 40 watchlist slugs
 // (the floor, never the ceiling) plus every other pre-token protocol that passes the
@@ -66,6 +79,11 @@ export interface ModelConstants {
   multiple_floor: number;
   multiple_cap: number;
   multiple_min_live: number;
+  momentum_weight: number;
+  momentum_cap: number;
+  momentum_min_live: number;
+  dominance_weight: number;
+  dominance_min_rows: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -74,17 +92,22 @@ export const MODEL: ModelConstants = {
   growth_cap: 100,
   maturity_floor: 0.65,
   maturity_range: 0.35,
-  maturity_days: 1095,
+  maturity_days: 1825,
   unknown_age_days: 365,
-  breadth_per_chain: 0.03,
-  breadth_max_chains: 5,
+  breadth_per_chain: 0.05,
+  breadth_max_chains: 32,
   multiple_floor: 0.05,
   multiple_cap: 1.5,
   multiple_min_live: 3,
+  momentum_weight: 0.5,
+  momentum_cap: 20,
+  momentum_min_live: 3,
+  dominance_weight: 0.15,
+  dominance_min_rows: 3,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -119,6 +142,9 @@ export interface BoardRow {
     growth_multiplier: number;
     maturity_multiplier: number;
     breadth_multiplier: number;
+    momentum_multiplier: number;
+    dominance_multiplier: number;
+    category_share: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -142,6 +168,9 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   breadth_multiplier: number;
+  momentum_multiplier: number;
+  dominance_multiplier: number;
+  category_share: number;
   watch: boolean;
   steps: string[];
 }
@@ -170,6 +199,8 @@ export interface RadarData {
   live_size: number;
   global_multiple: number;
   category_multiples: Record<string, number>;
+  /** The sector's median 7-day TVL change among its live-token protocols, in percent. */
+  category_momentum: Record<string, number>;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -233,13 +264,45 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants): { 
   return { byCategory, global };
 }
 
-/** The three multipliers and the implied value one protocol gets under `model`. */
+/**
+ * A sector's momentum: the median 7-day TVL change of the snapshot's live-token protocols
+ * in a category (needs at least `momentum_min_live` of them with a change), clamped to
+ * [-cap, +cap], as a factor 1 + clamped / 100 x weight; and the raw median percent itself,
+ * for the dashboard's category view. Categories without enough live data get no entry:
+ * their factor is 1. Computed from the snapshot at run time; no number is written in.
+ */
+export function sectorMomentum(snapshot: Snapshot, model: ModelConstants): { factors: Map<string, number>; pcts: Record<string, number> } {
+  const byCat = new Map<string, number[]>();
+  for (const p of snapshot.protocols) {
+    // The same live-token set the multiple prices from: a market cap above zero on a
+    // positive TVL, plus a 7-day change to read.
+    if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0 || p.change_7d === null) continue;
+    const key = p.category ?? '(none)';
+    const arr = byCat.get(key);
+    if (arr === undefined) byCat.set(key, [p.change_7d]);
+    else arr.push(p.change_7d);
+  }
+  const factors = new Map<string, number>();
+  const pcts: Record<string, number> = {};
+  for (const [key, changes] of byCat) {
+    if (changes.length < model.momentum_min_live) continue;
+    const med = medianOf([...changes].sort((a, b) => a - b));
+    const clamped = Math.min(model.momentum_cap, Math.max(-model.momentum_cap, med));
+    factors.set(key, 1 + (clamped / 100) * model.momentum_weight);
+    pcts[key] = Math.round(med * 10) / 10;
+  }
+  return { factors, pcts };
+}
+
+/** The six multipliers and the implied value one protocol gets under `model`. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   model: ModelConstants,
   multiple: number,
-): { implied: number; base: number; growthPct: number; growthMult: number; maturityMult: number; breadthMult: number; age: number | null } {
+  momentum: number,
+  dominance: number,
+): { implied: number; base: number; growthPct: number; growthMult: number; maturityMult: number; breadthMult: number; momentumMult: number; dominanceMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
@@ -247,10 +310,10 @@ export function impliedValue(
   const ageForModel = age ?? model.unknown_age_days;
   const cappedAge = Math.min(Math.max(ageForModel, 0), model.maturity_days);
   const maturityMult = model.maturity_floor + model.maturity_range * (Math.log(1 + cappedAge) / Math.log(1 + model.maturity_days));
-  const breadthMult = 1 + model.breadth_per_chain * Math.min(protocol.chains.length, model.breadth_max_chains);
+  const breadthMult = 1 + model.breadth_per_chain * Math.log2(1 + Math.min(protocol.chains.length, model.breadth_max_chains));
   const base = protocol.tvl_usd * multiple;
-  const implied = Math.max(1, Math.round(base * growthMult * maturityMult * breadthMult));
-  return { implied, base: Math.round(base), growthPct, growthMult, maturityMult, breadthMult, age };
+  const implied = Math.max(1, Math.round(base * growthMult * maturityMult * breadthMult * momentum * dominance));
+  return { implied, base: Math.round(base), growthPct, growthMult, maturityMult, breadthMult, momentumMult: momentum, dominanceMult: dominance, age };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -307,10 +370,34 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
   }
 
+  const { factors: momentumByCategory } = sectorMomentum(snapshot, model);
+
+  // Category leadership: a protocol's share of its category's pre-token TVL among the chosen
+  // rows. The factor is 1 + weight x share when the category holds at least minRows chosen
+  // rows, else 1: a lone protocol is not a leader.
+  const catTotals = new Map<string, { tvl: number; rows: number }>();
+  for (const p of chosen.values()) {
+    const key = p.category ?? '(none)';
+    const t = catTotals.get(key);
+    if (t === undefined) catTotals.set(key, { tvl: p.tvl_usd, rows: 1 });
+    else {
+      t.tvl += p.tvl_usd;
+      t.rows += 1;
+    }
+  }
+  const dominanceFor = (p: SnapshotProtocol): { factor: number; share: number } => {
+    const t = catTotals.get(p.category ?? '(none)');
+    if (t === undefined || t.rows < model.dominance_min_rows || t.tvl <= 0) return { factor: 1, share: 0 };
+    const share = p.tvl_usd / t.tvl;
+    return { factor: 1 + model.dominance_weight * share, share };
+  };
+
   const scored = [...chosen.values()].map((p) => {
     const multiple = byCategory.get(p.category ?? '(none)') ?? global;
-    const v = impliedValue(p, snapshot.as_of, model, multiple);
-    return { p, multiple, ...v };
+    const momentum = momentumByCategory.get(p.category ?? '(none)') ?? 1;
+    const dom = dominanceFor(p);
+    const v = impliedValue(p, snapshot.as_of, model, multiple, momentum, dom.factor);
+    return { p, multiple, momentum, dominance: dom.factor, share: dom.share, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -335,6 +422,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
       breadth_multiplier: round4(s.breadthMult),
+      momentum_multiplier: round4(s.momentumMult),
+      dominance_multiplier: round4(s.dominanceMult),
+      category_share: round4(s.share),
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
@@ -396,6 +486,24 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
 }
 
+/** The category's weekly action: one concrete thing to do each week, in its own words. */
+function weeklyActionFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'Repay a small part of the borrow and borrow it again, so the position shows weekly activity.';
+  if (c.includes('dex')) return 'Swap once in the main pool, in either direction, and keep the receipt.';
+  if (c.includes('yield aggregator') || c.includes('yield')) return 'Harvest the vault rewards and deposit them back into the same vault.';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'Open and close one small hedged position on the same market.';
+  if (c.includes('prediction')) return 'Place one small position on a market that closes within the week.';
+  if (c.includes('staking') || c.includes('restak')) return 'Claim the staking rewards and stake them again.';
+  if (c.includes('rwa')) return 'Check the yield accrual on the position and leave it in place.';
+  if (c.includes('risk curator') || c.includes('curator') || c.includes('allocator')) return 'Read the vault allocation report and keep the shares.';
+  if (c.includes('basis')) return 'Check the basis vault funding rate and hold the position.';
+  if (c.includes('stable')) return 'Mint or redeem a small amount of the stable asset and hold the rest.';
+  if (c.includes('bridge')) return 'Bridge a small amount to the chain and use it in the app.';
+  if (c.includes('governance')) return 'Vote on one live proposal.';
+  return 'Make one qualifying action, such as a deposit, a swap or a vote.';
+}
+
 /**
  * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived
  * from the protocol's own record (category, chains, TVL, age), never from a hand-written list
@@ -424,7 +532,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '15 minutes to set up',
     },
     {
-      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.`,
+      text: weeklyActionFor(p),
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
     },
@@ -477,6 +585,9 @@ export function radarRow(row: BoardRow, watch: boolean): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     breadth_multiplier: row.model.breadth_multiplier,
+    momentum_multiplier: row.model.momentum_multiplier,
+    dominance_multiplier: row.model.dominance_multiplier,
+    category_share: row.model.category_share,
     watch,
     steps: row.farm_steps,
   };
@@ -487,6 +598,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const { byCategory, global } = categoryMultiples(snapshot, model);
+  const { pcts: categoryMomentum } = sectorMomentum(snapshot, model);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const multiplesByCategory: Record<string, number> = {};
   for (const [k, v] of [...byCategory.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
@@ -504,6 +616,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     global_multiple: round4(global),
     category_multiples: multiplesByCategory,
+    category_momentum: categoryMomentum,
     rows: board.map((r) => radarRow(r, snapshot.watchlist.includes(r.slug))),
     live,
   };

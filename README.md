@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/nabila12667/token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/nabila12667/token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Token launch radar: 198 pre-token protocols ranked by implied value, with concrete farm plans — built from the DefiLlama snapshot.
+Token launch radar: 198 pre-token protocols ranked by implied value, with concrete farm plans — built from the DefiLlama snapshot. Model radar-3: TVL × category multiple × growth × maturity × breadth × sector momentum × category leadership. Top: #1 Steakhouse Financial $675.4M, #2 Sentora Curator $648.5M, #3 Gauntlet $403.4M.
 
 ## Run it
 

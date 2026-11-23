@@ -19,14 +19,16 @@
 
 <section class="model" aria-label="How the value is scored">
   <h2>How the value is scored</h2>
-  <p class="formula">implied&nbsp;=&nbsp;TVL&nbsp;×&nbsp;category&nbsp;multiple&nbsp;×&nbsp;growth&nbsp;×&nbsp;maturity&nbsp;×&nbsp;breadth</p>
+  <p class="formula">implied&nbsp;=&nbsp;TVL&nbsp;×&nbsp;category&nbsp;multiple&nbsp;×&nbsp;growth&nbsp;×&nbsp;maturity&nbsp;×&nbsp;breadth&nbsp;×&nbsp;momentum&nbsp;×&nbsp;dominance</p>
   <div class="factors">
     <div class="factor"><strong>Category multiple</strong><span>The median market-cap / TVL of the snapshot's live-token protocols in the same category (3 or more of them), else the median over all live-token protocols. A lending token is priced like lending tokens trade, not like dex tokens do. Clamped to 0.05–1.50.</span></div>
     <div class="factor"><strong>Growth</strong><span>1 + clamped 7-day TVL change (−50%…+100%) × 0.6. Growing TVL is worth more; one wild week cannot own the board.</span></div>
-    <div class="factor"><strong>Maturity</strong><span>0.65 + 0.35 × ln(1 + age) / ln(1096), age in days since first listed, capped at 3 years. Longer with no token, more record a launch would price — with diminishing returns. Unknown age counts as 365 days.</span></div>
-    <div class="factor"><strong>Breadth</strong><span>1 + 0.03 per chain, up to 5 chains. More chains, more distribution — a small boost on purpose.</span></div>
+    <div class="factor"><strong>Maturity</strong><span>0.65 + 0.35 × ln(1 + age) / ln(1826), age in days since first listed, capped at 5 years. Longer with no token, more record a launch would price — with diminishing returns. Unknown age counts as 365 days.</span></div>
+    <div class="factor"><strong>Breadth</strong><span>1 + 0.05 × log₂(1 + chains), capped at 32 chains. More chains, more distribution — the log keeps a protocol on 176 chains from owning the board.</span></div>
+    <div class="factor"><strong>Momentum</strong><span>1 + the category's sector momentum × 0.5: the median 7-day TVL change of its live-token protocols (3 or more), clamped to −20%…+20%. A sector the market is rewarding prices its next launches higher.</span></div>
+    <div class="factor"><strong>Dominance</strong><span>1 + 0.15 × the protocol's share of its category's pre-token TVL on the board. The category leader commands a launch premium; a category with fewer than 3 board rows gives none.</span></div>
   </div>
-  <p class="note">Nothing here names a protocol: the same formula scores every row. “Records no token” means DefiLlama's record carries no token — it is not proof the protocol has none. An implied value is this entry's own claim, never make.fun's, and it does not predict whether or when a token is issued.</p>
+  <p class="note">Nothing here names a protocol: the same formula scores every row. “Records no token” means DefiLlama's record carries no token — it is not proof the protocol has none. An implied value is this entry's own claim, never make.fun's, and it does not predict whether or when a token is issued. Model radar-3 adds sector momentum and category leadership to radar-2's four factors.</p>
 </section>
 
 <div class="controls" role="search">
@@ -48,6 +50,21 @@
 </div>
 
 <div class="stats" id="stats"></div>
+
+<section class="insights" aria-label="Top 10 and breakdowns">
+  <div class="panel">
+    <h2>Top 10 by implied value</h2>
+    <div id="topChart" class="bars"></div>
+  </div>
+  <div class="panel">
+    <h2>By category</h2>
+    <table class="mini"><thead><tr><th>Category</th><th class="num">Rows</th><th class="num">Implied</th><th class="num">Sector 7d</th></tr></thead><tbody id="catRows"></tbody></table>
+  </div>
+  <div class="panel">
+    <h2>By chain</h2>
+    <table class="mini"><thead><tr><th>Chain</th><th class="num">Rows</th><th class="num">Board TVL</th></tr></thead><tbody id="chainRows"></tbody></table>
+  </div>
+</section>
 
 <div class="layout">
   <main class="board-wrap">

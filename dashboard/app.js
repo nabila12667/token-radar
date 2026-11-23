@@ -3,10 +3,14 @@
 //
 // The value model, stated in the page's "How the value is scored" section and applied here:
 //   implied = TVL x categoryMultiple x growthMult x maturityMult x breadthMult
+//             x momentumMult x dominanceMult
 // where categoryMultiple is the median market-cap / TVL of the snapshot's live-token
 // protocols in the same category (3 or more), else the global live median, clamped 0.05-1.50;
 // growthMult = 1 + clamp(change_7d, -50, 100) / 100 x 0.6; maturityMult is log in age
-// (0.65 + 0.35 x ln(1 + min(age, 1095)) / ln(1096)); breadthMult = 1 + 0.03 per chain (max 5).
+// (0.65 + 0.35 x ln(1 + min(age, 1825)) / ln(1826)); breadthMult = 1 + 0.05 x log2(1 + chains),
+// capped at 32 chains; momentumMult = 1 + clamp(median 7-day change of the category's
+// live-token protocols, -20, +20) / 100 x 0.5; dominanceMult = 1 + 0.15 x the protocol's
+// share of its category's pre-token TVL on the board (3 or more rows in the category).
 
 (function () {
   'use strict';
@@ -107,6 +111,56 @@
     }).sort(SORTERS[state.sort] || SORTERS.rank);
   }
 
+  // ---- insights: top 10 chart, category and chain breakdowns ----------------
+  function renderInsights() {
+    var top = R.rows.slice(0, 10);
+    var max = top.length ? top[0].implied_value_usd : 1;
+    $('topChart').innerHTML = top.map(function (r) {
+      var w = Math.max(2, Math.round(r.implied_value_usd / max * 100));
+      return '<div class="bar-row"><span class="bar-rank">' + r.rank + '</span>' +
+        '<span class="bar-name">' + esc(r.name) + '</span>' +
+        '<span class="bar-track"><span class="bar-fill" style="width:' + w + '%"></span></span>' +
+        '<span class="bar-value">' + money(r.implied_value_usd) + '</span></div>';
+    }).join('');
+
+    var byCat = {};
+    R.rows.forEach(function (r) {
+      var k = r.category || '(none)';
+      var c = byCat[k] || (byCat[k] = { rows: 0, implied: 0, top: r.name });
+      c.rows += 1;
+      c.implied += r.implied_value_usd;
+    });
+    var catList = Object.keys(byCat).map(function (k) {
+      return { name: k, rows: byCat[k].rows, implied: byCat[k].implied, top: byCat[k].top };
+    }).sort(function (a, b) { return b.implied - a.implied; }).slice(0, 7);
+    $('catRows').innerHTML = catList.map(function (c) {
+      var mom = R.category_momentum[c.name];
+      var m = mom === undefined ? '—' : pct(mom);
+      var cls = mom === undefined ? '' : (mom >= 0 ? 'up' : 'down');
+      return '<tr><td>' + esc(c.name) + '<br><span class="slug">top: ' + esc(c.top) + '</span></td>' +
+        '<td class="num">' + c.rows + '</td>' +
+        '<td class="num value">' + money(c.implied) + '</td>' +
+        '<td class="num ' + cls + '">' + m + '</td></tr>';
+    }).join('');
+
+    var byChain = {};
+    R.rows.forEach(function (r) {
+      r.chains.forEach(function (ch) {
+        var c = byChain[ch] || (byChain[ch] = { rows: 0, tvl: 0 });
+        c.rows += 1;
+        c.tvl += r.tvl_usd;
+      });
+    });
+    var chainList = Object.keys(byChain).map(function (k) {
+      return { name: k, rows: byChain[k].rows, tvl: byChain[k].tvl };
+    }).sort(function (a, b) { return b.tvl - a.tvl; }).slice(0, 7);
+    $('chainRows').innerHTML = chainList.map(function (c) {
+      return '<tr><td>' + esc(c.name) + '</td>' +
+        '<td class="num">' + c.rows + '</td>' +
+        '<td class="num">' + money(c.tvl) + '</td></tr>';
+    }).join('');
+  }
+
   // ---- board rendering ------------------------------------------------------
   function rowHtml(r) {
     var g = r.change_7d === null ? '' : (r.change_7d >= 0 ? 'up' : 'down');
@@ -162,10 +216,22 @@
     var multipleNote = R.category_multiples[r.category] !== undefined
       ? 'median of ' + esc(r.category) + ' live tokens'
       : 'global live median — fewer than 3 live tokens in this category';
+    var afterGrowth = r.base_usd * r.growth_multiplier;
+    var afterMaturity = afterGrowth * r.maturity_multiplier;
+    var afterBreadth = afterMaturity * r.breadth_multiplier;
+    var afterMomentum = afterBreadth * r.momentum_multiplier;
+    var shareNote = r.category_share > 0
+      ? (r.category_share * 100).toFixed(1) + '% of ' + esc(r.category || 'its category') + ' pre-token TVL'
+      : 'no premium — fewer than 3 board rows in this category';
+    var momPct = R.category_momentum[r.category];
+    var momNote = momPct === undefined
+      ? 'no live-token sector data — fewer than 3 live tokens in this category'
+      : 'sector median 7-day TVL change of live ' + esc(r.category) + ' tokens: ' + pct(momPct);
     box.innerHTML =
       '<h3>' + esc(r.name) + '</h3>' +
       '<p class="d-slug">' + esc(r.slug) + ' · ' + esc(r.category || 'no category') + ' · ' + esc(r.chains.join(', ') || 'no chain listed') + '</p>' +
       '<p class="status-line">Token status: <b>records no token</b> — rank #' + r.rank + (r.watch ? ' · on the watchlist' : '') + '</p>' +
+      '<p class="why-line">Why this rank: ' + shareNote + ' · ' + momNote + '.</p>' +
       '<dl class="kv">' +
       '<dt>TVL</dt><dd>' + moneyFull(r.tvl_usd) + '</dd>' +
       '<dt>7-day TVL change</dt><dd>' + pct(r.change_7d) + '</dd>' +
@@ -175,9 +241,11 @@
       '<h4>Implied-value breakdown</h4>' +
       '<table class="breakdown"><tbody>' +
       '<tr><td>TVL × category multiple (' + r.category_multiple + ', ' + multipleNote + ')</td><td>' + moneyFull(r.base_usd) + '</td></tr>' +
-      '<tr><td>× growth (' + r.growth_multiplier + ')</td><td>' + moneyFull(Math.round(r.base_usd * r.growth_multiplier)) + '</td></tr>' +
-      '<tr><td>× maturity (' + r.maturity_multiplier + ')</td><td>' + moneyFull(Math.round(r.base_usd * r.growth_multiplier * r.maturity_multiplier)) + '</td></tr>' +
-      '<tr><td>× breadth (' + r.breadth_multiplier + ', ' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + ')</td><td>' + moneyFull(Math.round(r.base_usd * r.growth_multiplier * r.maturity_multiplier * r.breadth_multiplier)) + '</td></tr>' +
+      '<tr><td>× growth (' + r.growth_multiplier + ')</td><td>' + moneyFull(Math.round(afterGrowth)) + '</td></tr>' +
+      '<tr><td>× maturity (' + r.maturity_multiplier + ')</td><td>' + moneyFull(Math.round(afterMaturity)) + '</td></tr>' +
+      '<tr><td>× breadth (' + r.breadth_multiplier + ', ' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + ')</td><td>' + moneyFull(Math.round(afterBreadth)) + '</td></tr>' +
+      '<tr><td>× momentum (' + r.momentum_multiplier + ')</td><td>' + moneyFull(Math.round(afterMomentum)) + '</td></tr>' +
+      '<tr><td>× dominance (' + r.dominance_multiplier + ', ' + shareNote + ')</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
       '<tr class="total"><td>Implied value</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
       '</tbody></table>' +
       '<h4>Farm plan — 6 steps</h4>' +
@@ -253,5 +321,6 @@
     showLiveDetail(tr.getAttribute('data-slug'));
   });
 
+  renderInsights();
   render();
 })();
