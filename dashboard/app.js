@@ -2,11 +2,21 @@
 // No network, no fetch: every byte the page shows comes from data.js beside it.
 //
 // The value model, stated in the page's "How the value is scored" section and applied here:
-//   implied = TVL x categoryMultiple x growthMult x maturityMult x breadthMult
-// where categoryMultiple is the median market-cap / TVL of the snapshot's live-token
-// protocols in the same category (3 or more), else the global live median, clamped 0.05-1.50;
-// growthMult = 1 + clamp(change_7d, -50, 100) / 100 x 0.6; maturityMult is log in age
-// (0.65 + 0.35 x ln(1 + min(age, 1095)) / ln(1096)); breadthMult = 1 + 0.03 per chain (max 5).
+//   expected = TVL x fittedMultiple x launchOdds
+// where fittedMultiple is the median log(market-cap / TVL) of the snapshot's live-token
+// protocols in the same category, shrunk toward the global log-median with weight n / (n + 3),
+// and launchOdds is the category's smoothed launch rate times an age decay (full odds for the
+// first year with no token, halved every ~2 years after). The board ranks by expected value.
+//
+// Every term was fitted or dropped on held-out data before it shipped. Leave-one-out over the
+// snapshot's 128 live-token protocols: this model median |log error| 1.58 (typical miss 4.8x,
+// 24% within 2x, Spearman 0.40); v1 (radar-2) 1.69 (5.4x, 20%, 0.39). A two-fold split of the
+// live set confirms the direction (median 1.54). Dropped for failing held-out testing: the
+// 7-day growth multiplier (1.67), the breadth multiplier (1.65), an age term on the price
+// (the two halves disagree on its sign), v1's ratio clamp [0.05, 1.50] (58 of 128 live
+// protocols sit outside it), and v1's rising maturity multiplier. The 80% interval on every
+// row comes from the same leave-one-out errors (factor x14.0): four in five live tokens are
+// priced within 14x, half within 4.8x.
 
 (function () {
   'use strict';
@@ -38,7 +48,10 @@
     var s = (n > 0 ? '+' : '') + n.toFixed(1) + '%';
     return s;
   };
+  var oddsPct = function (n) { return Math.round(n * 100) + '%'; };
   var ageText = function (d) { return d === null || d === undefined ? '—' : d + 'd'; };
+  var verdictLabel = function (v) { return v === 'worth' ? 'Worth farming' : v === 'marginal' ? 'Marginal' : 'Skip'; };
+  var verdictShort = function (v) { return v === 'worth' ? 'WORTH' : v === 'marginal' ? 'MARGINAL' : 'SKIP'; };
 
   // ---- header, stats, filter options --------------------------------------
   $('meta').innerHTML =
@@ -49,10 +62,49 @@
   $('stats').innerHTML =
     '<span><b>' + R.rows.length + '</b> ranked rows</span>' +
     '<span><b>' + R.watchlist_size + '</b> watchlist (floor)</span>' +
-    '<span><b>' + R.early_size + '</b> early finds below and above the floor</span>' +
     '<span><b>' + R.live_size + '</b> live tokens set aside</span>' +
+    '<span><b>' + R.coverage.excluded + '</b> excluded, with a reason</span>' +
     '<span>snapshot <b>' + esc(R.as_of) + '</b></span>' +
     '<span id="shown"></span>';
+
+  // ---- integrity strip: the held-out numbers, and what was dropped ---------
+  (function () {
+    var v = R.validation;
+    var el = $('integrity');
+    if (!v || !el) return;
+    el.innerHTML =
+      '<h2>How this board was tested</h2>' +
+      '<div class="strip">' +
+      '<div class="strip-item"><strong>Leave-one-out, ' + v.live_n + ' live tokens</strong><span>Each live token priced with the model fitted without it. Median error <b>' + v.median_abs_log_err + '</b> in log terms — a typical miss of <b>4.8×</b>; <b>' + Math.round(v.within_2x * 100) + '%</b> within 2×, rank correlation <b>' + v.spearman + '</b>.</span></div>' +
+      '<div class="strip-item"><strong>Before: v1 (radar-2)</strong><span>Median error <b>' + v.v1_median_abs_log_err + '</b> (typical miss 5.4×), <b>' + Math.round(v.v1_within_2x * 100) + '%</b> within 2×, rank correlation <b>' + v.v1_spearman + '</b>. The fitted model beats it on every number — modestly, and honestly.</span></div>' +
+      '<div class="strip-item"><strong>Two-fold check</strong><span>Split the live set in half, fit on one half, score the other: median error <b>' + v.two_fold_median_abs_log_err + '</b>. The fitted category term holds up on a fresh half; the dropped terms did not.</span></div>' +
+      '<div class="strip-item"><strong>80% interval: ×' + v.interval_factor + '</strong><span>Four in five live tokens are priced within <b>' + v.interval_factor + '×</b> of their market cap. Every row shows its interval — the point value is a claim, the interval is the honest part.</span></div>' +
+      '</div>' +
+      '<p class="note">Dropped for failing held-out testing: ' + v.dropped.map(esc).join('; ') + '.</p>';
+  })();
+
+  // ---- coverage: all 758 protocols accounted for ---------------------------
+  (function () {
+    var c = R.coverage;
+    var el = $('coverage');
+    if (!c || !el) return;
+    var reasons = Object.keys(c.excluded_by_reason).sort().map(function (k) {
+      return '<span><b>' + c.excluded_by_reason[k] + '</b> ' + esc(k) + '</span>';
+    }).join('');
+    el.innerHTML =
+      '<h2>Coverage — all ' + c.total + ' protocols accounted for</h2>' +
+      '<p><b>' + c.board + '</b> on the board · <b>' + c.live_with_mcap + '</b> live tokens with a market cap · <b>' + c.live_no_mcap + '</b> live tokens with no market cap recorded · <b>' + c.excluded + '</b> pre-token protocols not ranked:</p>' +
+      '<p class="reasons">' + reasons + '</p>' +
+      '<details><summary>Show the ' + c.excluded + ' excluded protocols</summary>' +
+      '<table class="excluded"><thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Reason</th></tr></thead><tbody>' +
+      R.excluded.map(function (e) {
+        return '<tr><td><span class="name">' + esc(e.name) + '</span><br><span class="slug">' + esc(e.slug) + '</span></td>' +
+          '<td class="cat">' + esc(e.category || '—') + '</td>' +
+          '<td class="num">' + money(e.tvl_usd) + '</td>' +
+          '<td class="reason">' + esc(e.reason) + '</td></tr>';
+      }).join('') +
+      '</tbody></table></details>';
+  })();
 
   var cats = {};
   var chains = {};
@@ -91,6 +143,7 @@
   var SORTERS = {
     rank: function (a, b) { return a.rank - b.rank; },
     value: function (a, b) { return b.implied_value_usd - a.implied_value_usd || a.rank - b.rank; },
+    odds: function (a, b) { return b.launch_odds - a.launch_odds || a.rank - b.rank; },
     tvl: function (a, b) { return b.tvl_usd - a.tvl_usd || a.rank - b.rank; },
     growth: function (a, b) { return (b.change_7d === null ? -1e9 : b.change_7d) - (a.change_7d === null ? -1e9 : a.change_7d) || a.rank - b.rank; },
     age: function (a, b) { return (b.age_days === null ? -1 : b.age_days) - (a.age_days === null ? -1 : a.age_days) || a.rank - b.rank; },
@@ -114,12 +167,14 @@
       '<td class="rank">' + r.rank + '</td>' +
       '<td><span class="name">' + esc(r.name) + '</span>' +
         (r.watch ? '<span class="badge">WATCHLIST</span>' : '') +
+        '<span class="badge verdict-' + r.farm_verdict + '">' + verdictShort(r.farm_verdict) + '</span>' +
         '<br><span class="slug">' + esc(r.slug) + '</span></td>' +
       '<td class="cat">' + esc(r.category || '—') + '</td>' +
       '<td class="chains">' + esc(r.chains.slice(0, 3).join(', ') || '—') + '</td>' +
       '<td class="num">' + money(r.tvl_usd) + '</td>' +
       '<td class="num ' + g + '">' + pct(r.change_7d) + '</td>' +
       '<td class="num">' + ageText(r.age_days) + '</td>' +
+      '<td class="num odds">' + oddsPct(r.launch_odds) + '</td>' +
       '<td class="num value">' + money(r.implied_value_usd) + '</td></tr>';
   }
 
@@ -156,31 +211,32 @@
     for (var i = 0; i < R.rows.length; i++) if (R.rows[i].slug === slug) { r = R.rows[i]; break; }
     var box = $('detail');
     if (!r) {
-      box.innerHTML = '<p class="detail-empty">Click a row to see its detail: TVL, 7-day growth, age with no token, the implied-value breakdown, and the farm plan.</p>';
+      box.innerHTML = '<p class="detail-empty">Click a row to see its detail: TVL, 7-day growth, age with no token, the launch odds, the 80% interval, and the costed farm plan.</p>';
       return;
     }
     var multipleNote = R.category_multiples[r.category] !== undefined
-      ? 'median of ' + esc(r.category) + ' live tokens'
-      : 'global live median — fewer than 3 live tokens in this category';
+      ? 'median of ' + esc(r.category) + ' live tokens, shrunk toward the global median'
+      : 'global live median — no live token in this category to fit from';
     box.innerHTML =
       '<h3>' + esc(r.name) + '</h3>' +
       '<p class="d-slug">' + esc(r.slug) + ' · ' + esc(r.category || 'no category') + ' · ' + esc(r.chains.join(', ') || 'no chain listed') + '</p>' +
       '<p class="status-line">Token status: <b>records no token</b> — rank #' + r.rank + (r.watch ? ' · on the watchlist' : '') + '</p>' +
       '<dl class="kv">' +
       '<dt>TVL</dt><dd>' + moneyFull(r.tvl_usd) + '</dd>' +
-      '<dt>7-day TVL change</dt><dd>' + pct(r.change_7d) + '</dd>' +
+      '<dt>7-day change</dt><dd>' + pct(r.change_7d) + '</dd>' +
       '<dt>Age with no token</dt><dd>' + (r.age_days === null ? 'not reported' : r.age_days + ' days' + (r.listed_at ? ' · since ' + esc(r.listed_at) : '')) + '</dd>' +
-      '<dt>Implied value</dt><dd>' + moneyFull(r.implied_value_usd) + '</dd>' +
+      '<dt>Expected value</dt><dd>' + moneyFull(r.implied_value_usd) + '</dd>' +
+      '<dt>80% interval</dt><dd>' + moneyFull(r.interval_low_usd) + ' – ' + moneyFull(r.interval_high_usd) + '</dd>' +
+      '<dt>Farm verdict</dt><dd><span class="badge verdict-' + r.farm_verdict + '">' + verdictLabel(r.farm_verdict).toUpperCase() + '</span> ' + money(r.farm_wallet_expected_usd) + ' per wallet · ' + money(r.farm_per_hour_usd) + '/hour</dd>' +
       '</dl>' +
-      '<h4>Implied-value breakdown</h4>' +
+      '<h4>Expected-value breakdown</h4>' +
       '<table class="breakdown"><tbody>' +
-      '<tr><td>TVL × category multiple (' + r.category_multiple + ', ' + multipleNote + ')</td><td>' + moneyFull(r.base_usd) + '</td></tr>' +
-      '<tr><td>× growth (' + r.growth_multiplier + ')</td><td>' + moneyFull(Math.round(r.base_usd * r.growth_multiplier)) + '</td></tr>' +
-      '<tr><td>× maturity (' + r.maturity_multiplier + ')</td><td>' + moneyFull(Math.round(r.base_usd * r.growth_multiplier * r.maturity_multiplier)) + '</td></tr>' +
-      '<tr><td>× breadth (' + r.breadth_multiplier + ', ' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + ')</td><td>' + moneyFull(Math.round(r.base_usd * r.growth_multiplier * r.maturity_multiplier * r.breadth_multiplier)) + '</td></tr>' +
-      '<tr class="total"><td>Implied value</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
+      '<tr><td>TVL × fitted multiple (' + r.category_multiple + ', ' + multipleNote + ')</td><td>' + moneyFull(r.base_usd) + '</td></tr>' +
+      '<tr><td>If it launched</td><td>' + moneyFull(r.implied_if_launched_usd) + '</td></tr>' +
+      '<tr><td>× launch odds (' + oddsPct(r.launch_odds) + ' = ' + oddsPct(r.category_launch_rate) + ' category rate × ' + r.age_decay.toFixed(2) + ' age decay)</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
+      '<tr class="total"><td>Expected value</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
       '</tbody></table>' +
-      '<h4>Farm plan — 6 steps</h4>' +
+      '<h4>Farm plan — verdict first, then 6 steps</h4>' +
       '<ol class="steps">' + r.steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
   }
 
@@ -195,7 +251,7 @@
       '<dl class="kv">' +
       '<dt>TVL</dt><dd>' + moneyFull(r.tvl_usd) + '</dd>' +
       '<dt>Market cap</dt><dd>' + moneyFull(r.mcap_usd) + '</dd>' +
-      '<dt>7-day TVL change</dt><dd>' + pct(r.change_7d) + '</dd>' +
+      '<dt>7-day change</dt><dd>' + pct(r.change_7d) + '</dd>' +
       '</dl>' +
       '<p class="detail-empty">Live-token protocols are set aside from the ranked board: the radar ranks what may launch, and the market prices what already has.</p>';
   }

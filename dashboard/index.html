@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocols ranked by implied value</title>
+<title>Token Radar — pre-token protocols ranked by expected launch value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
   <div class="top-inner">
     <div>
       <h1><span class="radar-dot" aria-hidden="true"></span>TOKEN RADAR</h1>
-      <p class="tagline">Every protocol that records no token, ranked by what its token would be worth if the record stayed as it is.</p>
+      <p class="tagline">Every protocol that records no token, ranked by its expected launch value — what its token would be worth if it launched, times the chance it ever does.</p>
     </div>
     <div class="meta" id="meta">Loading snapshot…</div>
   </div>
@@ -19,14 +19,19 @@
 
 <section class="model" aria-label="How the value is scored">
   <h2>How the value is scored</h2>
-  <p class="formula">implied&nbsp;=&nbsp;TVL&nbsp;×&nbsp;category&nbsp;multiple&nbsp;×&nbsp;growth&nbsp;×&nbsp;maturity&nbsp;×&nbsp;breadth</p>
+  <p class="formula">expected&nbsp;=&nbsp;TVL&nbsp;×&nbsp;fitted&nbsp;multiple&nbsp;×&nbsp;launch&nbsp;odds</p>
   <div class="factors">
-    <div class="factor"><strong>Category multiple</strong><span>The median market-cap / TVL of the snapshot's live-token protocols in the same category (3 or more of them), else the median over all live-token protocols. A lending token is priced like lending tokens trade, not like dex tokens do. Clamped to 0.05–1.50.</span></div>
-    <div class="factor"><strong>Growth</strong><span>1 + clamped 7-day TVL change (−50%…+100%) × 0.6. Growing TVL is worth more; one wild week cannot own the board.</span></div>
-    <div class="factor"><strong>Maturity</strong><span>0.65 + 0.35 × ln(1 + age) / ln(1096), age in days since first listed, capped at 3 years. Longer with no token, more record a launch would price — with diminishing returns. Unknown age counts as 365 days.</span></div>
-    <div class="factor"><strong>Breadth</strong><span>1 + 0.03 per chain, up to 5 chains. More chains, more distribution — a small boost on purpose.</span></div>
+    <div class="factor"><strong>Fitted multiple</strong><span>The median log(market-cap / TVL) of the snapshot's live-token protocols in the same category, shrunk toward the global median with weight n / (n + 3). No clamp: the shrinkage, not a hard bound, keeps a thin category honest.</span></div>
+    <div class="factor"><strong>Launch odds</strong><span>The category's launch rate — live-token protocols over all protocols in the category, smoothed toward the global 55% — times an age decay: full odds for the first year with no token, halved every ~2 years after. Lending launches 78% of the time; Risk Curators 15%.</span></div>
+    <div class="factor"><strong>Honest interval</strong><span>Every row carries an 80% interval from the leave-one-out errors: four in five live tokens are priced within 14×, half within 4.8×. The point value is a claim, not a precision — the interval is the honest part.</span></div>
+    <div class="factor"><strong>Farm verdict</strong><span>Each plan is costed: capital, gas, active hours, and the expected value per wallet in $/hour, assuming 5% of the launch value goes to farmers split among 10,000 farmers. Worth, marginal, or skip — with the arithmetic shown.</span></div>
   </div>
-  <p class="note">Nothing here names a protocol: the same formula scores every row. “Records no token” means DefiLlama's record carries no token — it is not proof the protocol has none. An implied value is this entry's own claim, never make.fun's, and it does not predict whether or when a token is issued.</p>
+  <p class="note">Nothing here names a protocol: the same formula scores every row. “Records no token” means DefiLlama's record carries no token — it is not proof the protocol has none. An expected value is this entry's own claim, never make.fun's, and it does not predict whether or when a token is issued.</p>
+</section>
+
+<section class="integrity" id="integrity" aria-label="How this board was tested">
+  <h2>How this board was tested</h2>
+  <p class="integrity-loading">Testing the model against the snapshot's live tokens…</p>
 </section>
 
 <div class="controls" role="search">
@@ -36,7 +41,8 @@
   <label class="check"><input id="watchOnly" type="checkbox"> Watchlist only</label>
   <select id="sort" aria-label="Sort by">
     <option value="rank">Sort: rank</option>
-    <option value="value">Sort: implied value</option>
+    <option value="value">Sort: expected value</option>
+    <option value="odds">Sort: launch odds</option>
     <option value="tvl">Sort: TVL</option>
     <option value="growth">Sort: 7-day growth</option>
     <option value="age">Sort: age without token</option>
@@ -60,7 +66,8 @@
         <th data-sort="tvl">TVL</th>
         <th data-sort="growth">7d</th>
         <th data-sort="age">Age, no token</th>
-        <th data-sort="value">Implied value</th>
+        <th data-sort="odds">Launch odds</th>
+        <th data-sort="value">Expected value</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -71,14 +78,15 @@
       </tr></thead>
       <tbody id="liveRows"></tbody>
     </table>
+    <section class="coverage" id="coverage" aria-label="Coverage"></section>
   </main>
   <aside class="detail" id="detail" aria-live="polite">
-    <p class="detail-empty">Click a row to see its detail: TVL, 7-day growth, age with no token, the implied-value breakdown, and the farm plan.</p>
+    <p class="detail-empty">Click a row to see its detail: TVL, 7-day growth, age with no token, the launch odds, the 80% interval, and the costed farm plan.</p>
   </aside>
 </div>
 
 <footer>
-  <p>Source: DefiLlama protocols snapshot, fetched 2026-11-14. Board rows are pre-token protocols only; the Live view shows protocols whose token already trades, at the market's own value. Farm plans are a reader's checklist, not financial advice.</p>
+  <p>Source: DefiLlama protocols snapshot, fetched 2026-11-14. Board rows are pre-token protocols only; the Live view shows protocols whose token already trades, at the market's own value. The coverage section accounts for all 758 protocols in the snapshot. Farm plans are a reader's checklist, not financial advice.</p>
 </footer>
 
 <script src="../data.js"></script>
