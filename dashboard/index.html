@@ -19,14 +19,17 @@
 
 <section class="model" aria-label="How the value is scored">
   <h2>How the value is scored</h2>
-  <p class="formula">expected&nbsp;=&nbsp;TVL&nbsp;×&nbsp;fitted&nbsp;multiple&nbsp;×&nbsp;launch&nbsp;odds</p>
+  <p class="formula">expected&nbsp;=&nbsp;if&#8209;launched&nbsp;value&nbsp;×&nbsp;launch&nbsp;odds</p>
+  <p class="formula formula-sub">log(if&#8209;launched)&nbsp;=&nbsp;0.52&nbsp;×&nbsp;(log&nbsp;TVL&nbsp;−&nbsp;17.71)&nbsp;+&nbsp;category&nbsp;level&nbsp;+&nbsp;chain&nbsp;adjustment</p>
   <div class="factors">
-    <div class="factor"><strong>Fitted multiple</strong><span>The median log(market-cap / TVL) of the snapshot's live-token protocols in the same category, shrunk toward the global median with weight n / (n + 3). No clamp: the shrinkage, not a hard bound, keeps a thin category honest.</span></div>
+    <div class="factor"><strong>Size slope, not a proportion</strong><span>Market cap grows roughly with the square root of TVL, not in proportion to it: the fitted slope of log market cap on log TVL is 0.52, stable across leave-one-out folds (0.50–0.55). A $50M-TVL protocol carries an effective multiple near 0.24 at the global level; a $10B one near 0.019. The multiple falls as TVL rises — there is no single per-category multiple.</span></div>
+    <div class="factor"><strong>Category level, then chain</strong><span>Each category's level is the median of the size-adjusted residuals of the snapshot's live-token protocols in that category, shrunk toward the global level with weight n / (n + 3). The primary chain then adds its own shrunk adjustment (Solana −0.95, TON +0.61, Arbitrum +0.51 in log points), fitted only where a chain has at least two live protocols.</span></div>
     <div class="factor"><strong>Launch odds</strong><span>The category's launch rate — live-token protocols over all protocols in the category, smoothed toward the global 55% — times an age decay: full odds for the first year with no token, halved every ~2 years after. Lending launches 78% of the time; Risk Curators 15%.</span></div>
-    <div class="factor"><strong>Honest interval</strong><span>Every row carries an 80% interval from the leave-one-out errors: four in five live tokens are priced within 14×, half within 4.8×. The point value is a claim, not a precision — the interval is the honest part.</span></div>
+    <div class="factor"><strong>Honest interval</strong><span>Every row carries an 80% interval from the leave-one-out errors: four in five live tokens are priced within 11.6×, half within 3.5×. The point value is a claim, not a precision — the interval is the honest part.</span></div>
     <div class="factor"><strong>Farm verdict</strong><span>Each plan is costed: capital, gas, active hours, and the expected value per wallet in $/hour, assuming 5% of the launch value goes to farmers split among 10,000 farmers. Worth, marginal, or skip — with the arithmetic shown.</span></div>
   </div>
   <p class="note">Nothing here names a protocol: the same formula scores every row. “Records no token” means DefiLlama's record carries no token — it is not proof the protocol has none. An expected value is this entry's own claim, never make.fun's, and it does not predict whether or when a token is issued.</p>
+  <p class="note">The board's top expected values are about six times lower than the previous version's — not because the protocols shrank, but because the old model assumed market cap was proportional to TVL and so overstated the largest protocols. The biggest TVL rows compress the hardest under the fitted slope.</p>
 </section>
 
 <section class="integrity" id="integrity" aria-label="How this board was tested">

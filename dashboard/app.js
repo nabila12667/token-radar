@@ -2,21 +2,30 @@
 // No network, no fetch: every byte the page shows comes from data.js beside it.
 //
 // The value model, stated in the page's "How the value is scored" section and applied here:
-//   expected = TVL x fittedMultiple x launchOdds
-// where fittedMultiple is the median log(market-cap / TVL) of the snapshot's live-token
-// protocols in the same category, shrunk toward the global log-median with weight n / (n + 3),
-// and launchOdds is the category's smoothed launch rate times an age decay (full odds for the
-// first year with no token, halved every ~2 years after). The board ranks by expected value.
+//   expected = ifLaunched x launchOdds
+//   log(ifLaunched) = 0.52 x (log TVL - 17.71) + category level + chain adjustment
+// where the slope is the OLS fit of log market cap on log TVL over the snapshot's live-token
+// protocols, the category level is the shrunk median of the size-adjusted residuals in that
+// category (weight n / (n + 3) toward the global level), the chain adjustment is the shrunk
+// median leftover of the protocol's primary chain (weight n / (n + 2), only for chains with
+// at least two live protocols), and launchOdds is the category's smoothed launch rate times
+// an age decay (full odds for the first year with no token, halved every ~2 years after).
+// The multiple is TVL-dependent: it falls as TVL rises, so the dashboard publishes effective
+// multiples at the $100M reference TVL and each row's own effective multiple at its TVL.
 //
 // Every term was fitted or dropped on held-out data before it shipped. Leave-one-out over the
-// snapshot's 128 live-token protocols: this model median |log error| 1.58 (typical miss 4.8x,
-// 24% within 2x, Spearman 0.40); v1 (radar-2) 1.69 (5.4x, 20%, 0.39). A two-fold split of the
-// live set confirms the direction (median 1.54). Dropped for failing held-out testing: the
-// 7-day growth multiplier (1.67), the breadth multiplier (1.65), an age term on the price
-// (the two halves disagree on its sign), v1's ratio clamp [0.05, 1.50] (58 of 128 live
-// protocols sit outside it), and v1's rising maturity multiplier. The 80% interval on every
-// row comes from the same leave-one-out errors (factor x14.0): four in five live tokens are
-// priced within 14x, half within 4.8x.
+// snapshot's 128 live-token protocols, refitting everything inside each fold: this model
+// median |log error| 1.24 (typical miss 3.5x, 36% within 2x, Spearman 0.43); v1 (radar-2)
+// 1.69 (5.4x, 20%, 0.39). A two-fold split of the live set confirms the direction (pooled
+// median 1.24). Dropped for failing held-out testing: the 7-day growth multiplier
+// (re-confirmed), the breadth multiplier, an age term on the price, v1's ratio clamp
+// [0.05, 1.50] (58 of 128 live protocols sit outside it), v1's rising maturity multiplier,
+// a quadratic TVL term, averaging over all chains instead of the primary chain,
+// trimmed-mean category intercepts, and a fixed slope of 0.55. The 80% interval on every
+// row comes from the same leave-one-out errors (factor x11.6): four in five live tokens are
+// priced within 11.6x, half within 3.5x. The board's top values are about 6x lower than
+// the previous version's because the old model overstated large protocols, not because
+// the protocols shrank.
 
 (function () {
   'use strict';
@@ -57,7 +66,7 @@
   $('meta').innerHTML =
     'Snapshot <b>' + esc(R.as_of) + '</b><br>' +
     '<b>' + R.rows.length + '</b> board rows · <b>' + R.watchlist_size + '</b> watchlist<br>' +
-    'Model <b>' + esc(R.model_version) + '</b> · global multiple <b>' + R.global_multiple + '</b>';
+    'Model <b>' + esc(R.model_version) + '</b> · global effective multiple @ $100M TVL <b>' + R.global_multiple + '</b>';
 
   $('stats').innerHTML =
     '<span><b>' + R.rows.length + '</b> ranked rows</span>' +
@@ -72,14 +81,17 @@
     var v = R.validation;
     var el = $('integrity');
     if (!v || !el) return;
+    var typicalMiss = Math.exp(v.median_abs_log_err).toFixed(1);
+    var v1TypicalMiss = Math.exp(v.v1_median_abs_log_err).toFixed(1);
     el.innerHTML =
       '<h2>How this board was tested</h2>' +
       '<div class="strip">' +
-      '<div class="strip-item"><strong>Leave-one-out, ' + v.live_n + ' live tokens</strong><span>Each live token priced with the model fitted without it. Median error <b>' + v.median_abs_log_err + '</b> in log terms — a typical miss of <b>4.8×</b>; <b>' + Math.round(v.within_2x * 100) + '%</b> within 2×, rank correlation <b>' + v.spearman + '</b>.</span></div>' +
-      '<div class="strip-item"><strong>Before: v1 (radar-2)</strong><span>Median error <b>' + v.v1_median_abs_log_err + '</b> (typical miss 5.4×), <b>' + Math.round(v.v1_within_2x * 100) + '%</b> within 2×, rank correlation <b>' + v.v1_spearman + '</b>. The fitted model beats it on every number — modestly, and honestly.</span></div>' +
-      '<div class="strip-item"><strong>Two-fold check</strong><span>Split the live set in half, fit on one half, score the other: median error <b>' + v.two_fold_median_abs_log_err + '</b>. The fitted category term holds up on a fresh half; the dropped terms did not.</span></div>' +
+      '<div class="strip-item"><strong>Leave-one-out, ' + v.live_n + ' live tokens</strong><span>Each live token priced with the model fitted without it — slope, levels and chain adjustments all refitted inside the fold. Median error <b>' + v.median_abs_log_err + '</b> in log terms — a typical miss of <b>' + typicalMiss + '×</b>; <b>' + Math.round(v.within_2x * 100) + '%</b> within 2×, rank correlation <b>' + v.spearman + '</b>.</span></div>' +
+      '<div class="strip-item"><strong>Before: v1 (radar-2)</strong><span>Median error <b>' + v.v1_median_abs_log_err + '</b> (typical miss ' + v1TypicalMiss + '×), <b>' + Math.round(v.v1_within_2x * 100) + '%</b> within 2×, rank correlation <b>' + v.v1_spearman + '</b>. The fitted model beats it on every number — and the win holds on every held-out check, not just the median.</span></div>' +
+      '<div class="strip-item"><strong>Two-fold check</strong><span>Split the live set in half, fit on one half, score the other, pool both halves: median error <b>' + v.two_fold_median_abs_log_err + '</b>. The fitted slope, category levels and chain adjustments hold up on a fresh half; the dropped terms did not.</span></div>' +
       '<div class="strip-item"><strong>80% interval: ×' + v.interval_factor + '</strong><span>Four in five live tokens are priced within <b>' + v.interval_factor + '×</b> of their market cap. Every row shows its interval — the point value is a claim, the interval is the honest part.</span></div>' +
       '</div>' +
+      '<p class="note">The multiple is TVL-dependent: it falls as TVL rises. The dashboard publishes effective multiples at the $' + (R.reference_tvl_usd / 1e6) + 'M reference TVL and each category\'s shrunk level; the effective multiple at any TVL follows from the level by exp(' + R.slope_b + ' × (log TVL − ' + R.lt0 + ') + level) / TVL.</p>' +
       '<p class="note">Dropped for failing held-out testing: ' + v.dropped.map(esc).join('; ') + '.</p>';
   })();
 
@@ -214,9 +226,9 @@
       box.innerHTML = '<p class="detail-empty">Click a row to see its detail: TVL, 7-day growth, age with no token, the launch odds, the 80% interval, and the costed farm plan.</p>';
       return;
     }
-    var multipleNote = R.category_multiples[r.category] !== undefined
-      ? 'median of ' + esc(r.category) + ' live tokens, shrunk toward the global median'
-      : 'global live median — no live token in this category to fit from';
+    var multipleNote = R.category_levels && R.category_levels[r.category] !== undefined
+      ? 'effective multiple at this TVL — category level ' + R.category_levels[r.category] + ', shrunk toward the global level; the multiple falls as TVL rises'
+      : 'global level — no live token in this category to fit from, so the category level is the global one';
     box.innerHTML =
       '<h3>' + esc(r.name) + '</h3>' +
       '<p class="d-slug">' + esc(r.slug) + ' · ' + esc(r.category || 'no category') + ' · ' + esc(r.chains.join(', ') || 'no chain listed') + '</p>' +
@@ -231,7 +243,7 @@
       '</dl>' +
       '<h4>Expected-value breakdown</h4>' +
       '<table class="breakdown"><tbody>' +
-      '<tr><td>TVL × fitted multiple (' + r.category_multiple + ', ' + multipleNote + ')</td><td>' + moneyFull(r.base_usd) + '</td></tr>' +
+      '<tr><td>If it launched (TVL × effective multiple ' + r.category_multiple + ', ' + multipleNote + ')</td><td>' + moneyFull(r.base_usd) + '</td></tr>' +
       '<tr><td>If it launched</td><td>' + moneyFull(r.implied_if_launched_usd) + '</td></tr>' +
       '<tr><td>× launch odds (' + oddsPct(r.launch_odds) + ' = ' + oddsPct(r.category_launch_rate) + ' category rate × ' + r.age_decay.toFixed(2) + ' age decay)</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
       '<tr class="total"><td>Expected value</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +

@@ -3,46 +3,77 @@
 // The board ranks pre-token protocols by an expected value that follows only from the sealed
 // snapshot's own figures. Nothing here names a protocol: the same functions score every row.
 //
-//   expected = TVL x fittedMultiple x launchOdds
+//   expected = impliedIfLaunched x launchOdds
 //
-//   fittedMultiple  the market's own price for this kind of protocol, fitted in log space:
-//                   the median log(market-cap / TVL) of the snapshot's live-token protocols
-//                   in the same category, shrunk toward the global log-median by
-//                   empirical-Bayes weight n / (n + 3). No clamp: the shrinkage, not a hard
-//                   bound, keeps a thin category honest. (v1 clamped the ratio-space median
-//                   to [0.05, 1.50]; 58 of 128 live protocols sit outside that band, so the
-//                   clamp threw away the market's own signal.)
-//   launchOdds      the chance a protocol like this one ever issues a token, from the peers'
-//                   record: the category's launch rate (live-token protocols over all
-//                   protocols in the category, Laplace-smoothed toward the global rate with
-//                   a pseudo-count of 2) times an age decay. A protocol that has run a year
-//                   with no token keeps its odds; each further ~2 years halves them. The
-//                   decay is a stated rule, not a fitted number: the snapshot carries no
-//                   launch dates, so no age effect on launching can be fitted from it.
-//   expected        fittedMultiple x TVL is what the token would be worth IF it launched;
-//                   times launchOdds is the expected value, and the board ranks by that.
-//                   Steakhouse Financial is the board's biggest TVL and its biggest
-//                   if-launched value, but its category has launched only 13% of the time,
-//                   so its expected value is a tenth of its if-launched value.
+//   impliedIfLaunched   what the token would be worth if it launched, from a log-linear
+//                       size law fitted on the snapshot's live-token protocols:
+//                         log(mcap) = b * (log(TVL) - LT0) + M_category + A_chain
+//                       b is the ordinary-least-squares slope of log market cap on log TVL
+//                       (about 0.52 on this snapshot: market cap grows roughly with the
+//                       square root of TVL, not in proportion to it). LT0 is the mean log
+//                       TVL of the live set. M_category is the category's shrunk median
+//                       level of the size-adjusted residuals, weight n / (n + 3) toward the
+//                       global median level G. A_chain is the primary chain's shrunk median
+//                       of what is left after the category level, weight n / (n + 2),
+//                       fitted only where a chain has at least two live protocols; a thin
+//                       or unseen chain adds nothing. The multiple is therefore
+//                       TVL-dependent: a $50M-TVL protocol carries an effective multiple
+//                       near 0.24, a $10B one near 0.019, at the global level. There is no
+//                       single per-category multiple any more, and no clamp: the slope and
+//                       the shrinkage do the regularising.
+//   launchOdds          the chance a protocol like this one ever issues a token, from the
+//                       peers' record: the category's launch rate (live-token protocols
+//                       over all protocols in the category, Laplace-smoothed toward the
+//                       global rate with a pseudo-count of 2) times an age decay. A protocol
+//                       that has run a year with no token keeps its odds; each further
+//                       ~2 years halves them. The decay is a stated rule, not a fitted
+//                       number: the snapshot carries no launch dates, so no age effect on
+//                       launching can be fitted from it.
+//   expected            impliedIfLaunched x launchOdds, and the board ranks by that.
+//                       Steakhouse Financial is the board's biggest TVL and, under the
+//                       old proportional model, its biggest if-launched value; under this
+//                       model its if-launched value compresses hard, because the market
+//                       does not price giant TVL in proportion.
 //
-// Every term was fitted or dropped on held-out data before it shipped. The program fits the
-// multiples and validates the whole model by leave-one-out over the snapshot's 128 live-token
-// protocols every run, and publishes the numbers in the dashboard as the integrity strip:
+// Why the slope, not the proportion (v3's radar-4 assumed market cap proportional to
+// TVL, elasticity exactly 1): in the snapshot's 128 live-token protocols the
+// correlation of log(mcap / TVL) with log TVL is -0.41, and the fitted slope is 0.52
+// (stable across leave-one-out folds: 0.50 to 0.55). v3 systematically overvalued
+// giant-TVL protocols — its #2 and #4 board rows fall to #16 and #26 here — and
+// undervalued small ones. The board's top expected value drops about sixfold against
+// v3, because v3 overstated the large protocols, not because the protocols shrank.
+// Say that plainly in the dossier: the protocols did not get smaller; the ruler did.
+//
+// Every term was fitted or dropped on held-out data before it shipped. The program fits
+// the slope, the levels and the chain adjustments and validates the whole model by
+// leave-one-out over the snapshot's 128 live-token protocols every run, refitting
+// everything inside each fold, and publishes the numbers in the dashboard as the
+// integrity strip:
 //   - v1 (radar-2: ratio median, clamped, growth 0.6, rising maturity, breadth 0.03):
 //     median |log error| 1.69, typical miss 5.4x, 20% within 2x, Spearman 0.39.
-//   - radar-4 (this model): median |log error| 1.58, typical miss 4.8x, 24% within 2x,
-//     Spearman 0.40; a two-fold split of the live set confirms the direction.
+//   - radar-5 (this model): median |log error| 1.24, typical miss 3.5x, 36% within 2x,
+//     Spearman 0.43; a two-fold split of the live set confirms the direction.
 //   - Dropped, because they did not survive held-out testing: the 7-day growth multiplier
-//     (leave-one-out 1.67, worse than the 1.63 of TVL x global median alone), the breadth
-//     multiplier (1.65), and an age term on the price (the two halves of the live set
-//     disagree on its sign — it is noise, not signal). Age still enters the model, but
-//     only through the launch odds, where it points the right way: older with no token,
-//     less likely to launch. The v1 rising maturity multiplier (older = worth more) is
-//     gone entirely.
+//     (re-confirmed: it hurts at every shrinkage tried, and its raw correlation with the
+//     log ratio is -0.15, the wrong sign for a positive multiplier), the breadth
+//     multiplier (chain-count correlation -0.02), and an age term on the price
+//     (correlation -0.02; the two halves of the live set disagree on its sign — it is
+//     noise, not signal). Age still enters the model, but only through the launch odds,
+//     where it points the right way: older with no token, less likely to launch. The
+//     v1 rising maturity multiplier (older = worth more) is gone entirely.
+//   - Also dropped: a quadratic TVL term (no better headline error, extra complexity),
+//     averaging over all of a protocol's chains instead of its primary chain (worse),
+//     trimmed-mean category intercepts (their median gain over plain medians is not
+//     significant — the paired-bootstrap confidence interval crosses zero — and trimmed
+//     means are less robust than medians for thin categories), and a fixed slope of
+//     0.55 (statistically indistinguishable from the fitted slope, but a hand-picked
+//     constant where the data can fit the number itself).
 //   - The 80% interval on every row comes from the same leave-one-out errors: four in
-//     five live tokens are priced within 14x, half within 4.8x. The interval is wide
+//     five live tokens are priced within 11.6x, half within 3.5x. The interval is wide
 //     because the market's own mcap / TVL spans four orders of magnitude; the board
-//     shows the range instead of pretending the point value is precise.
+//     shows the range instead of pretending the point value is precise. The chain
+//     effects rest on small counts (Solana 7, TON 3 live protocols) and are shrunk for
+//     that reason.
 //
 // The board holds the 40 watchlist slugs (the floor, never the ceiling) plus every other
 // rankable pre-token protocol. Rankable means pre-token and not a versioned pool, not a
@@ -86,8 +117,10 @@ export interface Snapshot {
 
 /** The model's constants, as the dashboard states them. */
 export interface ModelConstants {
-  /** Empirical-Bayes pseudo-count: a category's log-median weighs n / (n + k). */
+  /** Empirical-Bayes pseudo-count: a category's level weighs n / (n + k) toward the global. */
   category_shrink_k: number;
+  /** Empirical-Bayes pseudo-count for a primary chain's adjustment, toward the global leftover. */
+  chain_shrink_k: number;
   /** Laplace pseudo-count for the category launch rate, toward the global rate. */
   odds_smoothing: number;
   /** Days with no token before the launch odds start to decay. */
@@ -104,6 +137,7 @@ export interface ModelConstants {
 
 export const MODEL: ModelConstants = {
   category_shrink_k: 3,
+  chain_shrink_k: 2,
   odds_smoothing: 2,
   odds_age_grace_days: 365,
   odds_age_half_life_days: 730,
@@ -113,7 +147,10 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
+
+/** The TVL the dashboard's published category multiples are evaluated at ($100M). */
+export const REFERENCE_TVL_USD = 100_000_000;
 
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface FarmStep {
@@ -249,8 +286,14 @@ export interface RadarData {
   watchlist_size: number;
   board_size: number;
   live_size: number;
+  reference_tvl_usd: number;
+  slope_b: number;
+  lt0: number;
+  global_level: number;
   global_multiple: number;
   category_multiples: Record<string, number>;
+  category_levels: Record<string, number>;
+  chain_adjustments: Record<string, number>;
   category_launch_rates: Record<string, number>;
   validation: Validation;
   coverage: Coverage;
@@ -283,6 +326,12 @@ function medianOf(values: number[]): number {
   return n % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
+/** The arithmetic mean of a list of numbers. */
+function meanOf(values: number[]): number {
+  if (values.length === 0) return NaN;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
 /** A whole day count from `from` to `to`, clamped at zero; null when either date is absent or bad. */
 export function ageDays(asOf: string, listedAt: string | null): number | null {
   if (listedAt === null) return null;
@@ -302,36 +351,97 @@ export function livePriced(snapshot: Snapshot): SnapshotProtocol[] {
   return snapshot.protocols.filter((p) => p.mcap_usd !== null && p.tvl_usd > 0 && p.mcap_usd > 0);
 }
 
+/** The category key a protocol files under: its category, or "(none)" when DefiLlama names none. */
+function categoryKey(p: SnapshotProtocol): string {
+  return p.category ?? '(none)';
+}
+
+/** The primary chain a protocol names: the first entry of `chains`, or "(none)" when it lists none. */
+function primaryChain(p: SnapshotProtocol): string {
+  return p.chains.length > 0 ? p.chains[0]! : '(none)';
+}
+
 /**
- * What the snapshot's live market says a category is worth, fitted in log space: the global
- * log-median of mcap / TVL, and each category's log-median with its live count. Fitted from
- * the snapshot at run time; no category's number is written in by hand.
+ * The fitted market: everything the log-linear size law needs, fitted from the snapshot
+ * at run time. No category's number, no chain's number and no slope is written in by
+ * hand — the fit is recomputed from whatever live protocols the snapshot carries.
+ *
+ *   slopeB        OLS slope of log(mcap) on log(TVL) over the live set.
+ *   lt0           mean log(TVL) over the live set; the slope pivots here.
+ *   globalLevel   median of the size-adjusted residuals r = y - b * (x - LT0).
+ *   byCategory    each category's shrunk level M_c = w * median(r in c) + (1 - w) * G,
+ *                 w = n / (n + category_shrink_k); unseen categories fall back to G.
+ *   chainLevels   each primary chain's shrunk adjustment A_ch, fitted on the leftover
+ *                 s = r - M_category, only for chains with at least two live protocols;
+ *                 thin or unseen chains add nothing.
  */
 export interface FittedMarket {
-  globalLogMedian: number;
-  byCategory: Map<string, { logMedian: number; n: number }>;
+  slopeB: number;
+  lt0: number;
+  globalLevel: number;
+  byCategory: Map<string, { level: number; n: number }>;
+  chainLevels: Map<string, { adjustment: number; n: number }>;
   globalLaunchRate: number;
   launchRateByCategory: Map<string, number>;
 }
 
 export function fitMarket(snapshot: Snapshot, model: ModelConstants): FittedMarket {
   const live = livePriced(snapshot);
-  const globalLogMedian = medianOf(live.map((p) => Math.log(p.mcap_usd! / p.tvl_usd)));
-  const byCatRaw = new Map<string, number[]>();
-  for (const p of live) {
-    const key = p.category ?? '(none)';
-    const arr = byCatRaw.get(key);
-    if (arr === undefined) byCatRaw.set(key, [Math.log(p.mcap_usd! / p.tvl_usd)]);
-    else arr.push(Math.log(p.mcap_usd! / p.tvl_usd));
+
+  // 1. Size slope: ordinary least squares of log(mcap) on log(TVL), closed form.
+  const xs = live.map((p) => Math.log(p.tvl_usd));
+  const ys = live.map((p) => Math.log(p.mcap_usd!));
+  const lt0 = meanOf(xs);
+  const yMean = meanOf(ys);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < live.length; i++) {
+    num += (xs[i]! - lt0) * (ys[i]! - yMean);
+    den += (xs[i]! - lt0) ** 2;
   }
-  const byCategory = new Map<string, { logMedian: number; n: number }>();
-  for (const [key, ratios] of byCatRaw) byCategory.set(key, { logMedian: medianOf(ratios), n: ratios.length });
+  const slopeB = den > 0 ? num / den : 0;
+
+  // 2. Size-adjusted residuals, and the global level: their median.
+  const residuals = live.map((_, i) => ys[i]! - slopeB * (xs[i]! - lt0));
+  const globalLevel = medianOf(residuals);
+
+  // 3. Category levels: each category's median residual, shrunk toward the global level.
+  const byCatRaw = new Map<string, number[]>();
+  for (let i = 0; i < live.length; i++) {
+    const key = categoryKey(live[i]!);
+    const arr = byCatRaw.get(key);
+    if (arr === undefined) byCatRaw.set(key, [residuals[i]!]);
+    else arr.push(residuals[i]!);
+  }
+  const byCategory = new Map<string, { level: number; n: number }>();
+  for (const [key, rs] of byCatRaw) {
+    const w = rs.length / (rs.length + model.category_shrink_k);
+    byCategory.set(key, { level: w * medianOf(rs) + (1 - w) * globalLevel, n: rs.length });
+  }
+
+  // 4. Chain adjustments: the leftover after the category level, per primary chain,
+  //    shrunk toward the global leftover median; only chains with n >= 2 carry one.
+  const leftovers = live.map((p, i) => residuals[i]! - (byCategory.get(categoryKey(p))?.level ?? globalLevel));
+  const globalLeftover = medianOf(leftovers);
+  const byChainRaw = new Map<string, number[]>();
+  for (let i = 0; i < live.length; i++) {
+    const key = primaryChain(live[i]!);
+    const arr = byChainRaw.get(key);
+    if (arr === undefined) byChainRaw.set(key, [leftovers[i]!]);
+    else arr.push(leftovers[i]!);
+  }
+  const chainLevels = new Map<string, { adjustment: number; n: number }>();
+  for (const [key, ss] of byChainRaw) {
+    if (ss.length < 2) continue;
+    const w2 = ss.length / (ss.length + model.chain_shrink_k);
+    chainLevels.set(key, { adjustment: w2 * medianOf(ss) + (1 - w2) * globalLeftover, n: ss.length });
+  }
 
   // Launch rates: live-token protocols over all protocols in the category, smoothed
   // toward the global rate with a pseudo-count of `odds_smoothing`.
   const counts = new Map<string, { live: number; pre: number }>();
   for (const p of snapshot.protocols) {
-    const key = p.category ?? '(none)';
+    const key = categoryKey(p);
     const e = counts.get(key) ?? { live: 0, pre: 0 };
     if (isPreToken(p)) e.pre += 1;
     else e.live += 1;
@@ -343,15 +453,46 @@ export function fitMarket(snapshot: Snapshot, model: ModelConstants): FittedMark
   for (const [key, e] of counts) {
     launchRateByCategory.set(key, (e.live + model.odds_smoothing * globalLaunchRate) / (e.live + e.pre + model.odds_smoothing));
   }
-  return { globalLogMedian, byCategory, globalLaunchRate, launchRateByCategory };
+  return { slopeB, lt0, globalLevel, byCategory, chainLevels, globalLaunchRate, launchRateByCategory };
 }
 
-/** The fitted multiple for one protocol: its category's log-median shrunk toward the global. */
-export function fittedMultiple(p: SnapshotProtocol, fit: FittedMarket, model: ModelConstants): { multiple: number; categoryLiveN: number } {
-  const cat = fit.byCategory.get(p.category ?? '(none)');
-  if (cat === undefined) return { multiple: Math.exp(fit.globalLogMedian), categoryLiveN: 0 };
-  const w = cat.n / (cat.n + model.category_shrink_k);
-  return { multiple: Math.exp(w * cat.logMedian + (1 - w) * fit.globalLogMedian), categoryLiveN: cat.n };
+/** A protocol's fitted category level, and how many live protocols fitted it. */
+export function categoryLevel(p: SnapshotProtocol, fit: FittedMarket): { level: number; n: number } {
+  const cat = fit.byCategory.get(categoryKey(p));
+  if (cat === undefined) return { level: fit.globalLevel, n: 0 };
+  return cat;
+}
+
+/** A protocol's primary-chain adjustment: zero for a thin or unseen chain, or no chain. */
+export function chainAdjustment(p: SnapshotProtocol, fit: FittedMarket): number {
+  if (p.chains.length === 0) return 0;
+  return fit.chainLevels.get(primaryChain(p))?.adjustment ?? 0;
+}
+
+/** The model's log prediction for a protocol's market cap if it launched. */
+export function predictLogMcap(p: SnapshotProtocol, fit: FittedMarket): number {
+  return fit.slopeB * (Math.log(p.tvl_usd) - fit.lt0) + categoryLevel(p, fit).level + chainAdjustment(p, fit);
+}
+
+/**
+ * The fitted multiple for one protocol: its if-launched value over its TVL. The multiple
+ * is TVL-dependent — the slope below 1 makes it fall as TVL rises — so this is the
+ * effective multiple at this protocol's own TVL, not a constant per category.
+ */
+export function fittedMultiple(p: SnapshotProtocol, fit: FittedMarket): { multiple: number; categoryLiveN: number } {
+  const { level, n } = categoryLevel(p, fit);
+  const logIf = fit.slopeB * (Math.log(p.tvl_usd) - fit.lt0) + level + chainAdjustment(p, fit);
+  return { multiple: Math.exp(logIf) / p.tvl_usd, categoryLiveN: n };
+}
+
+/**
+ * The effective multiple a category level implies at a reference TVL: the if-launched
+ * value a protocol of that TVL would carry, over the TVL. The dashboard publishes these
+ * at $100M so a reader can compare categories on one footing; the formula is the same
+ * one that prices every row, and the multiple at any other TVL follows from it.
+ */
+export function effectiveMultipleAt(level: number, tvl: number, fit: FittedMarket): number {
+  return Math.exp(fit.slopeB * (Math.log(tvl) - fit.lt0) + level) / tvl;
 }
 
 /** The launch odds for one protocol: its category's smoothed launch rate times the age decay. */
@@ -360,7 +501,7 @@ export function launchOdds(p: SnapshotProtocol, asOf: string, fit: FittedMarket,
   const ageForDecay = age ?? model.unknown_age_days;
   const overGrace = Math.max(0, ageForDecay - model.odds_age_grace_days);
   const ageDecay = 1 / (1 + overGrace / model.odds_age_half_life_days);
-  const categoryRate = fit.launchRateByCategory.get(p.category ?? '(none)') ?? fit.globalLaunchRate;
+  const categoryRate = fit.launchRateByCategory.get(categoryKey(p)) ?? fit.globalLaunchRate;
   return { odds: categoryRate * ageDecay, categoryRate, ageDecay, age };
 }
 
@@ -384,14 +525,14 @@ export function impliedValue(
   intervalHigh: number;
   age: number | null;
 } {
-  const { multiple, categoryLiveN } = fittedMultiple(protocol, fit, model);
+  const logIf = predictLogMcap(protocol, fit);
+  const ifLaunched = Math.max(1, Math.round(Math.exp(logIf)));
+  const { multiple, categoryLiveN } = fittedMultiple(protocol, fit);
   const { odds, categoryRate, ageDecay, age } = launchOdds(protocol, asOf, fit, model);
-  const base = protocol.tvl_usd * multiple;
-  const ifLaunched = Math.max(1, Math.round(base));
   const implied = Math.max(1, Math.round(ifLaunched * odds));
   return {
     implied,
-    base: Math.round(base),
+    base: ifLaunched,
     multiple,
     categoryLiveN,
     ifLaunched,
@@ -637,8 +778,11 @@ function spearman(predicted: number[], actual: number[]): number {
 /**
  * The model's validation, computed from the snapshot at run time: leave-one-out over the
  * 128 live-token protocols for this model and for v1, plus a two-fold split that checks
- * the fitted category term holds up on a fresh half. Deterministic: the live set is
- * walked in snapshot order and every median is over a sorted list.
+ * the fitted terms hold up on a fresh half. The leave-one-out refits everything inside
+ * every fold — the size slope, the global level, the category levels and the chain
+ * adjustments, all from the 127 training protocols only — so the number is honest.
+ * Deterministic: the live set is walked in snapshot order and every median is over a
+ * sorted list.
  */
 export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL): Validation {
   const live = livePriced(snapshot);
@@ -659,7 +803,7 @@ export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL)
   };
   const thisLoo = loo((train, p) => {
     const fit = fitMarket({ ...snapshot, protocols: train }, model);
-    return Math.log(p.tvl_usd * fittedMultiple(p, fit, model).multiple);
+    return predictLogMcap(p, fit);
   });
   const v1Loo = loo((train, p) => v1LogPrediction(train, p, asOf));
   const thisSum = summarize(thisLoo.errs);
@@ -668,16 +812,17 @@ export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL)
   const p80 = sortedErrs[Math.min(sortedErrs.length - 1, Math.floor(0.8 * sortedErrs.length))]!;
   const actuals = live.map((p) => Math.log(p.mcap_usd!));
 
-  // Two-fold: split the live set by slug order, fit on one half, score the other.
+  // Two-fold: split the live set by slug order, fit on one half, score the other, and
+  // pool the errors from both folds before taking the median.
   const bySlugOrder = [...live].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
   const halfA = bySlugOrder.filter((_, i) => i % 2 === 0);
   const halfB = bySlugOrder.filter((_, i) => i % 2 === 1);
   const foldErr = (trainSet: SnapshotProtocol[], testSet: SnapshotProtocol[]): number[] => {
     const fit = fitMarket({ ...snapshot, protocols: trainSet }, model);
-    return testSet.map((p) => Math.abs(Math.log(p.tvl_usd * fittedMultiple(p, fit, model).multiple) - Math.log(p.mcap_usd!)));
+    return testSet.map((p) => Math.abs(predictLogMcap(p, fit) - Math.log(p.mcap_usd!)));
   };
-  const foldMedian = (errs: number[]): number => [...errs].sort((a, b) => a - b)[Math.floor(errs.length / 2)]!;
-  const twoFold = (foldMedian(foldErr(halfA, halfB)) + foldMedian(foldErr(halfB, halfA))) / 2;
+  const pooledFoldErrs = [...foldErr(halfA, halfB), ...foldErr(halfB, halfA)].sort((a, b) => a - b);
+  const twoFold = pooledFoldErrs[Math.floor(pooledFoldErrs.length / 2)]!;
 
   return {
     live_n: live.length,
@@ -694,11 +839,15 @@ export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL)
     v1_spearman: round4(spearman(v1Loo.preds, actuals)),
     two_fold_median_abs_log_err: round4(twoFold),
     dropped: [
-      '7-day growth multiplier (leave-one-out 1.67 vs 1.63 for TVL x global median alone)',
-      'breadth multiplier (leave-one-out 1.65)',
-      'age term on the price (the two halves of the live set disagree on its sign)',
+      '7-day growth multiplier (re-confirmed: it hurts at every shrinkage tried; its raw correlation with the log ratio is -0.15, the wrong sign for a positive multiplier)',
+      'breadth multiplier, chain count (correlation -0.02 with the log ratio)',
+      'age term on the price (correlation -0.02; the two halves of the live set disagree on its sign)',
       'v1 ratio clamp [0.05, 1.50] (58 of 128 live protocols sit outside it)',
       'v1 rising maturity multiplier (older with no token is worth more only if it launches; the launch odds now carry the age effect, downward)',
+      'quadratic TVL term (no better headline error, extra complexity)',
+      'averaging over all of a protocol\'s chains instead of its primary chain (worse leave-one-out error)',
+      'trimmed-mean category intercepts (their median gain over plain medians is not significant; trimmed means are less robust than medians for thin categories)',
+      'fixed slope 0.55 (statistically indistinguishable from the fitted OLS slope, but a hand-picked constant where the data can fit the number itself)',
     ],
   };
 }
@@ -838,9 +987,20 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const liveWithMcap = live.filter((r) => r.mcap_usd !== null).length;
   const excludedByReason: Record<string, number> = {};
   for (const e of excluded) excludedByReason[e.reason] = (excludedByReason[e.reason] ?? 0) + 1;
+  // The published multiples are effective multiples at the $100M reference TVL: the
+  // multiple is TVL-dependent, so no single per-category multiple is ever published as
+  // if it were constant. The shrunk category levels M_c are published alongside them,
+  // and the effective multiple at any TVL follows from the level by the formula in
+  // effectiveMultipleAt.
   const multiplesByCategory: Record<string, number> = {};
+  const levelsByCategory: Record<string, number> = {};
   for (const [k, v] of [...fit.byCategory.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
-    multiplesByCategory[k] = round4(Math.exp(v.logMedian));
+    multiplesByCategory[k] = round4(effectiveMultipleAt(v.level, REFERENCE_TVL_USD, fit));
+    levelsByCategory[k] = round4(v.level);
+  }
+  const chainAdjustments: Record<string, number> = {};
+  for (const [k, v] of [...fit.chainLevels.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
+    chainAdjustments[k] = round4(v.adjustment);
   }
   const ratesByCategory: Record<string, number> = {};
   for (const [k, v] of [...fit.launchRateByCategory.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
@@ -855,8 +1015,14 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     live_size: live.length,
-    global_multiple: round4(Math.exp(fit.globalLogMedian)),
+    reference_tvl_usd: REFERENCE_TVL_USD,
+    slope_b: round4(fit.slopeB),
+    lt0: round4(fit.lt0),
+    global_level: round4(fit.globalLevel),
+    global_multiple: round4(effectiveMultipleAt(fit.globalLevel, REFERENCE_TVL_USD, fit)),
     category_multiples: multiplesByCategory,
+    category_levels: levelsByCategory,
+    chain_adjustments: chainAdjustments,
     category_launch_rates: ratesByCategory,
     validation,
     coverage: {
